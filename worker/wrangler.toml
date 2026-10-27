@@ -20,6 +20,10 @@ GEMINI_VOICE = "Puck"
 # Google's docs disagree on v1alpha vs v1beta for constrained tokens. If the
 # token request fails with 404, try "v1beta".
 GEMINI_API_VERSION = "v1alpha"
+# Language hint for the transcript of what the child says (the model itself
+# understands Hebrew either way). If Gemini closes the connection with 1007,
+# set this to "" to let it auto-detect.
+GEMINI_TRANSCRIBE_LANGUAGE = "he-IL"
 
 OPENAI_MODEL = "gpt-realtime-2.1-mini"
 OPENAI_VOICE = "marin"

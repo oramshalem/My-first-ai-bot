@@ -70,7 +70,10 @@ export const gemini = {
           responseModalities: ["AUDIO"],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_VOICE } } },
         },
-        inputAudioTranscription: {},
+        // Without a hint the transcriber guesses the language and often picks Spanish or German.
+        inputAudioTranscription: env.GEMINI_TRANSCRIBE_LANGUAGE
+          ? { languageCodes: [env.GEMINI_TRANSCRIBE_LANGUAGE] }
+          : {},
         outputAudioTranscription: {},
       },
     };

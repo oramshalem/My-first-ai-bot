@@ -252,6 +252,10 @@ test("issues a locked Gemini token when PROVIDER is gemini", async () => {
   assert.equal(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, "Puck");
   assert.deepEqual(setup.inputAudioTranscription, {});
 
+  await app.fetch(tokenRequest(ROBOT), { ...geminiEnv, GEMINI_TRANSCRIBE_LANGUAGE: "he-IL" });
+  const hinted = JSON.parse(calls[1].init.body).bidiGenerateContentSetup;
+  assert.deepEqual(hinted.inputAudioTranscription, { languageCodes: ["he-IL"] });
+
   const list = await (await app.fetch(adminGet("/api/sessions"), geminiEnv)).json();
   assert.equal(list.provider, "gemini");
   assert.equal(list.sessions[0].model, "gemini-3.8-live");

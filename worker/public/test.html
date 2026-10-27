@@ -324,7 +324,13 @@ async function connectGemini({ token, ws_url, model }) {
   };
   ws.onclose = (e) => {
     log(`ws closed ${e.code} ${e.reason}`);
-    if (ws) fail(`Gemini סגר את החיבור (${e.code}${e.reason ? ": " + e.reason : ""})`);
+    if (!ws) return;
+    const detail = `${e.code}${e.reason ? ": " + e.reason : ""}`;
+    if (e.code === 1007 && !gemini.ready) {
+      fail(`Gemini דחה את ההגדרות (${detail}). נסה לשנות ב-wrangler.toml את GEMINI_TRANSCRIBE_LANGUAGE ל-"" ולהפעיל מחדש`);
+    } else {
+      fail(`Gemini סגר את החיבור (${detail})`);
+    }
   };
 }
 
