@@ -101,11 +101,15 @@ async function authenticateDevice(request, env) {
   const deviceSecret = bearer(request);
   if (!deviceId || !deviceSecret) return false;
 
+  if (!env.DEVICE_KEYS) {
+    console.error("DEVICE_KEYS is not set. Locally: run `npm run check-local`, then `npm run setup-local`.");
+    return false;
+  }
   let devices;
   try {
-    devices = JSON.parse(env.DEVICE_KEYS ?? "");
+    devices = JSON.parse(env.DEVICE_KEYS);
   } catch {
-    console.error("DEVICE_KEYS is missing or not valid JSON");
+    console.error("DEVICE_KEYS is not valid JSON. Locally: run `npm run check-local` to see why.");
     return false;
   }
   if (!devices || !Object.hasOwn(devices, deviceId) || typeof devices[deviceId] !== "string") {
