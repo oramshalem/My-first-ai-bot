@@ -1,0 +1,17 @@
+name = "kids-robot-token"
+main = "src/index.js"
+compatibility_date = "2026-10-20"
+
+# The character prompt and the test page are bundled into the Worker as text.
+[[rules]]
+type = "Text"
+globs = ["**/*.txt", "**/*.html"]
+fallthrough = true
+
+# Settings that are not secret. OPENAI_API_KEY and DEVICE_KEYS are set with
+# `wrangler secret put` (or .dev.vars locally) and never live in this file.
+[vars]
+MODEL = "gpt-realtime-2.1-mini"
+VOICE = "marin"
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+TOKEN_TTL_SECONDS = "120"

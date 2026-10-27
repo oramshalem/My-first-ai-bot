@@ -4,7 +4,7 @@
 
 ## הכנה
 
-1. פותחים את [prompts/character_v1.md](../prompts/character_v1.md) ומעתיקים את הטקסט להדבקה.
+1. פותחים את [prompts/character_v1.txt](../prompts/character_v1.txt) ומעתיקים את כל הטקסט.
 2. OpenAI: בפלייגראונד של Realtime בוחרים במודל `gpt-realtime-2.1-mini`, מדביקים את ה-prompt ב-Instructions ועוברים על הקולות הזמינים. בוחרים 2 קולות למבחן.
 3. Gemini: ב-AI Studio נכנסים למצב השיחה החיה (Live), מדביקים את אותו prompt ב-System instructions ובוחרים 2 קולות.
 4. מכינים אוזניות או רמקול ומיקרופון במרחק שדומה לרובוט על שולחן, בערך 50 ס"מ מהילד.

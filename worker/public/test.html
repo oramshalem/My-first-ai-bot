@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>בדיקת שיחה</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1c1c1c; --muted: #6b6b6b;
+    --border: #dddddd; --accent: #2f6fdf; --kid: #e8f0fe; --robot: #f1f8e9; --error: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616; --card: #202020; --text: #eeeeee; --muted: #9a9a9a;
+      --border: #333333; --accent: #6b9cff; --kid: #1e2a3d; --robot: #1f2b1d; --error: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; display: grid; gap: 16px; }
+  h1 { font-size: 1.4rem; margin: 0; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  h2 { font-size: 1rem; margin: 0 0 8px; }
+  label { display: block; font-size: .9rem; color: var(--muted); margin-bottom: 4px; }
+  input { width: 100%; padding: 8px 10px; font: inherit; color: inherit; background: var(--bg);
+          border: 1px solid var(--border); border-radius: 8px; direction: ltr; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .buttons { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--accent);
+           background: var(--accent); color: #fff; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  #status { color: var(--muted); }
+  #status.error { color: var(--error); }
+  #transcript { display: grid; gap: 6px; max-height: 360px; overflow-y: auto; }
+  .msg { padding: 6px 10px; border-radius: 8px; }
+  .msg.kid { background: var(--kid); }
+  .msg.robot { background: var(--robot); }
+  .msg b { font-weight: 600; margin-left: 6px; }
+  #latency-summary { font-size: 1.2rem; margin-bottom: 6px; }
+  #latency-list { color: var(--muted); font-size: .9rem; direction: ltr; text-align: right; }
+  details pre { direction: ltr; text-align: left; font-size: .8rem; max-height: 240px; overflow: auto;
+                background: var(--bg); padding: 8px; border-radius: 8px; white-space: pre-wrap; }
+  .empty { color: var(--muted); }
+  @media (max-width: 480px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>בדיקת שיחה דרך שרת הטוקנים</h1>
+
+  <section>
+    <div class="row">
+      <div>
+        <label for="device-id">מזהה מכשיר</label>
+        <input id="device-id" value="browser-test" autocomplete="off">
+      </div>
+      <div>
+        <label for="device-secret">סוד מכשיר</label>
+        <input id="device-secret" type="password" autocomplete="off">
+      </div>
+    </div>
+    <div class="buttons">
+      <button id="connect">התחל שיחה</button>
+      <button id="disconnect" class="secondary" disabled>סיים</button>
+      <span id="status">לא מחובר</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>תמלול</h2>
+    <div id="transcript"><span class="empty">השיחה תופיע כאן</span></div>
+  </section>
+
+  <section>
+    <h2>זמן תגובה</h2>
+    <div id="latency-summary" class="empty">עוד אין מדידות</div>
+    <div id="latency-list"></div>
+    <label>מסוף הדיבור (לפי ה-VAD של OpenAI) עד שהאודיו של התשובה מתחיל להגיע. היעד הוא עד 1.5 שניות בממוצע.</label>
+  </section>
+
+  <section>
+    <details>
+      <summary>לוג אירועים</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+</main>
+
+<audio id="remote-audio" autoplay></audio>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
+// The first of these after the child stops talking counts as "answer started".
+const ANSWER_START_EVENTS = new Set([
+  "output_audio_buffer.started", "response.output_audio.delta", "response.audio.delta",
+]);
+
+let pc = null, dc = null, mic = null;
+let speechStoppedAt = null;
+const latencies = [];
+
+try { const saved = localStorage.getItem("deviceId"); if (saved) $("device-id").value = saved; } catch {}
+
+function setStatus(text, isError = false) {
+  $("status").textContent = text;
+  $("status").classList.toggle("error", isError);
+}
+
+function log(line) {
+  const el = $("log");
+  el.textContent += line + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+function addMessage(who, text) {
+  if (!text) return;
+  const box = $("transcript");
+  box.querySelector(".empty")?.remove();
+  const div = document.createElement("div");
+  div.className = "msg " + who;
+  const label = document.createElement("b");
+  label.textContent = who === "kid" ? "ילד:" : "רובוט:";
+  div.append(label, document.createTextNode(text));
+  box.append(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function recordLatency(ms) {
+  latencies.push(ms);
+  const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length;
+  const summary = $("latency-summary");
+  summary.classList.remove("empty");
+  summary.textContent = `ממוצע ${(avg / 1000).toFixed(2)} שניות, ${latencies.length} מדידות`;
+  $("latency-list").textContent = latencies.map((x) => (x / 1000).toFixed(2) + "s").join("  ");
+}
+
+function handleEvent(ev) {
+  if (ev.type !== "response.output_audio_transcript.delta" && ev.type !== "response.audio_transcript.delta") {
+    log(ev.type);
+  }
+  if (ev.type === "input_audio_buffer.speech_stopped") {
+    speechStoppedAt = performance.now();
+  } else if (ANSWER_START_EVENTS.has(ev.type) && speechStoppedAt !== null) {
+    recordLatency(performance.now() - speechStoppedAt);
+    speechStoppedAt = null;
+  } else if (ev.type === "conversation.item.input_audio_transcription.completed") {
+    addMessage("kid", ev.transcript);
+  } else if (ev.type === "response.output_audio_transcript.done" || ev.type === "response.audio_transcript.done") {
+    addMessage("robot", ev.transcript);
+  } else if (ev.type === "error") {
+    setStatus("שגיאה: " + (ev.error?.message ?? "לא ידועה"), true);
+    log(JSON.stringify(ev));
+  }
+}
+
+async function connect() {
+  $("connect").disabled = true;
+  const deviceId = $("device-id").value.trim();
+  try { localStorage.setItem("deviceId", deviceId); } catch {}
+
+  try {
+    setStatus("מבקש טוקן...");
+    const tokenRes = await fetch("/token", {
+      method: "POST",
+      headers: { "x-device-id": deviceId, authorization: "Bearer " + $("device-secret").value },
+    });
+    if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים");
+    if (!tokenRes.ok) throw new Error("השרת החזיר " + tokenRes.status);
+    const { client_secret, model } = await tokenRes.json();
+    log("token ok, model " + model);
+
+    setStatus("מבקש גישה למיקרופון...");
+    mic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+
+    pc = new RTCPeerConnection();
+    pc.ontrack = (e) => { $("remote-audio").srcObject = e.streams[0]; };
+    pc.onconnectionstatechange = () => {
+      log("connection: " + pc.connectionState);
+      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+        setStatus("החיבור נפל", true);
+      }
+    };
+    mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+
+    dc = pc.createDataChannel("oai-events");
+    dc.onmessage = (e) => handleEvent(JSON.parse(e.data));
+    dc.onopen = () => {
+      setStatus("מחובר. אפשר לדבר");
+      $("disconnect").disabled = false;
+      // Let the character greet first, like the robot will when it wakes up.
+      dc.send(JSON.stringify({
+        type: "response.create",
+        response: { instructions: "תגיד שלום קצר ותציג את עצמך במשפט אחד." },
+      }));
+    };
+
+    setStatus("מתחבר ל-OpenAI...");
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpRes = await fetch(OPENAI_CALLS_URL, {
+      method: "POST",
+      body: offer.sdp,
+      headers: { authorization: "Bearer " + client_secret, "content-type": "application/sdp" },
+    });
+    if (!sdpRes.ok) throw new Error("OpenAI החזיר " + sdpRes.status + ": " + (await sdpRes.text()));
+    await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
+  } catch (err) {
+    setStatus(err.message, true);
+    log("error: " + err.message);
+    disconnect(false);
+  }
+}
+
+function disconnect(resetStatus = true) {
+  dc?.close();
+  pc?.close();
+  mic?.getTracks().forEach((t) => t.stop());
+  dc = pc = mic = null;
+  speechStoppedAt = null;
+  $("connect").disabled = false;
+  $("disconnect").disabled = true;
+  if (resetStatus) setStatus("לא מחובר");
+}
+
+$("connect").onclick = connect;
+$("disconnect").onclick = () => disconnect();
+</script>
+</body>
+</html>
