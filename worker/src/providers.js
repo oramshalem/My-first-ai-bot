@@ -1,6 +1,9 @@
 // Speech-to-speech providers. Each one turns the character prompt into a
 // short-lived token request, so the API key never leaves the server.
 // PROVIDER in wrangler.toml picks which one /token uses.
+//
+// mode "push": the device says when the child starts and stops talking (push to talk).
+// mode "auto": the provider detects the end of speech by itself.
 
 const OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets";
 const GEMINI_HOST = "generativelanguage.googleapis.com";
@@ -16,7 +19,7 @@ export const openai = {
   model: (env) => env.OPENAI_MODEL,
   voice: (env) => env.OPENAI_VOICE,
 
-  tokenRequest(env, instructions) {
+  tokenRequest(env, instructions, { mode = "auto" } = {}) {
     const body = {
       expires_after: { anchor: "created_at", seconds: ttlSeconds(env) },
       session: {
@@ -28,7 +31,8 @@ export const openai = {
             // Text transcript of what the child said, for the parent log.
             transcription: { model: env.OPENAI_TRANSCRIBE_MODEL, language: "he" },
             // Semantic VAD copes better with children pausing mid-sentence.
-            turn_detection: { type: "semantic_vad", eagerness: "auto" },
+            // In push mode the client commits the audio buffer itself.
+            turn_detection: mode === "push" ? null : { type: "semantic_vad", eagerness: "auto" },
           },
           output: { voice: env.OPENAI_VOICE },
         },
@@ -55,7 +59,7 @@ export const gemini = {
   model: (env) => env.GEMINI_MODEL,
   voice: (env) => env.GEMINI_VOICE,
 
-  tokenRequest(env, instructions, now = Date.now()) {
+  tokenRequest(env, instructions, { mode = "auto", now = Date.now() } = {}) {
     const body = {
       uses: 1,
       // How long a started conversation may last, and how soon it must start.
@@ -75,6 +79,8 @@ export const gemini = {
           ? { languageCodes: [env.GEMINI_TRANSCRIBE_LANGUAGE] }
           : {},
         outputAudioTranscription: {},
+        // In push mode the client sends activityStart / activityEnd itself.
+        ...(mode === "push" && { realtimeInputConfig: { automaticActivityDetection: { disabled: true } } }),
       },
     };
     return [

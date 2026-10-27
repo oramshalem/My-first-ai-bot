@@ -272,3 +272,20 @@ test("says the server is not configured when DEVICE_KEYS is missing", async () =
   assert.equal((await res.json()).error, "server_not_configured");
   assert.equal(calls.length, 0);
 });
+
+test("push mode turns off automatic end-of-speech detection", async () => {
+  const push = (url) => new Request(url, { method: "POST", headers: ROBOT });
+
+  const res = await app.fetch(push("https://worker.test/token?mode=push"), { ...env, PROVIDER: "gemini" });
+  assert.equal((await res.json()).mode, "push");
+  const geminiSetup = JSON.parse(calls[0].init.body).bidiGenerateContentSetup;
+  assert.deepEqual(geminiSetup.realtimeInputConfig, { automaticActivityDetection: { disabled: true } });
+
+  await app.fetch(push("https://worker.test/token?mode=push"), env);
+  assert.equal(JSON.parse(calls[1].init.body).session.audio.input.turn_detection, null);
+
+  await app.fetch(push("https://worker.test/token"), { ...env, PROVIDER: "gemini" });
+  assert.equal(JSON.parse(calls[2].init.body).bidiGenerateContentSetup.realtimeInputConfig, undefined);
+  await app.fetch(push("https://worker.test/token?mode=nonsense"), env);
+  assert.equal(JSON.parse(calls[3].init.body).session.audio.input.turn_detection.type, "semantic_vad");
+});

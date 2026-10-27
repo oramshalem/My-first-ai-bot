@@ -31,9 +31,10 @@ async function handleToken(request, env, instructions) {
   }
 
   const provider = providerFor(env);
+  const mode = new URL(request.url).searchParams.get("mode") === "push" ? "push" : "auto";
   let upstream;
   try {
-    upstream = await fetch(...provider.tokenRequest(env, instructions));
+    upstream = await fetch(...provider.tokenRequest(env, instructions, { mode }));
   } catch (err) {
     console.error(`${provider.name} request failed`, err);
     await safeLog(env, () => addEvents(env.DB, null, [{ kind: "upstream_error", text: `${provider.name}: ${err}` }]));
@@ -54,10 +55,11 @@ async function handleToken(request, env, instructions) {
   const sessionId = await safeLog(env, () =>
     createSession(env.DB, { deviceId, model, voice: provider.voice(env) }),
   );
-  console.log("token issued", { deviceId, provider: provider.name, model, sessionId });
+  console.log("token issued", { deviceId, provider: provider.name, model, mode, sessionId });
   return json({
     provider: provider.name,
     model,
+    mode,
     session_id: sessionId ?? null,
     ...provider.tokenResponse(env, data),
   });
