@@ -429,7 +429,9 @@ function flushGeminiKid() {
   if (gemini.kidText) { addMessage("kid", gemini.kidText); gemini.kidText = ""; }
 }
 
+// The child's words go first: their transcript often arrives after the answer has started.
 function flushGeminiRobot() {
+  flushGeminiKid();
   if (gemini.robotText) { addMessage("robot", gemini.robotText); gemini.robotText = ""; }
 }
 
