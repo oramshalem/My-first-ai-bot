@@ -23,6 +23,7 @@ export function createApp({ instructions, testPage, logsPage }) {
 // The device sends its id in X-Device-Id and its secret as a bearer token.
 // On success it gets a short-lived provider token, never the API key.
 async function handleToken(request, env, instructions) {
+  if (!env.DEVICE_KEYS) return notConfigured();
   const deviceId = request.headers.get("x-device-id") ?? "";
   if (!(await authenticateDevice(request, env))) {
     await safeLog(env, () => addEvents(env.DB, null, [{ kind: "auth_failed", text: deviceId.slice(0, 100) }]));
@@ -64,6 +65,7 @@ async function handleToken(request, env, instructions) {
 
 // Devices report what happened during a conversation: transcripts, latency, errors.
 async function handleLog(request, env) {
+  if (!env.DEVICE_KEYS) return notConfigured();
   if (!(await authenticateDevice(request, env))) return json({ error: "unauthorized" }, 401);
   if (!env.DB) return json({ error: "logging_disabled" }, 503);
 
@@ -101,10 +103,7 @@ async function authenticateDevice(request, env) {
   const deviceSecret = bearer(request);
   if (!deviceId || !deviceSecret) return false;
 
-  if (!env.DEVICE_KEYS) {
-    console.error("DEVICE_KEYS is not set. Locally: run `npm run check-local`, then `npm run setup-local`.");
-    return false;
-  }
+  if (!env.DEVICE_KEYS) return false;
   let devices;
   try {
     devices = JSON.parse(env.DEVICE_KEYS);
@@ -151,6 +150,12 @@ async function safeLog(env, fn) {
     console.error("logging failed", err);
     return undefined;
   }
+}
+
+// Missing secrets are a setup problem, not a wrong password, so say so.
+function notConfigured() {
+  console.error("DEVICE_KEYS is not set. Locally: run `npm run check-local`, then `npm run setup-local`.");
+  return json({ error: "server_not_configured" }, 503);
 }
 
 function html(body) {

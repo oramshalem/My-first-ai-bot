@@ -203,6 +203,7 @@ async function connect() {
       headers: { "x-device-id": deviceId, authorization: "Bearer " + secret },
     });
     if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים");
+    if (tokenRes.status === 503) throw new Error("השרת לא מוגדר: חסר קובץ .dev.vars. עצור את השרת, הרץ npm run setup-local ואז npm run local");
     if (!tokenRes.ok) throw new Error("השרת החזיר " + tokenRes.status + ". הפרטים במסך הלוגים");
     const token = await tokenRes.json();
     session = { id: token.session_id, deviceId, secret };

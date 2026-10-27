@@ -1,12 +1,19 @@
 // Checks worker/.dev.vars without printing any secret, and says how to fix what is wrong.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const FILE = new URL("../.dev.vars", import.meta.url);
 const problems = [];
 const ok = [];
 
+const path = fileURLToPath(FILE);
+console.log("Checking " + path);
 if (!existsSync(FILE)) {
-  console.log("✗ worker/.dev.vars does not exist.\n  Fix: npm run setup-local");
+  // Notepad and Explorer often add .txt or drop the leading dot.
+  const near = readdirSync(new URL("..", import.meta.url)).filter((f) => /dev.?vars/i.test(f));
+  console.log("✗ This file does not exist, so the server has no keys or device secrets.");
+  if (near.length) console.log(`  Found a similar file instead: ${near.join(", ")}. The name must be exactly .dev.vars`);
+  console.log("  Fix: npm run setup-local (in this same folder), then npm run local");
   process.exit(1);
 }
 

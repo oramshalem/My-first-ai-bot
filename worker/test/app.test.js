@@ -261,3 +261,10 @@ test("gemini is the default provider", async () => {
   await app.fetch(tokenRequest(ROBOT), { ...env, PROVIDER: undefined });
   assert.match(calls[0].url, /generativelanguage/);
 });
+
+test("says the server is not configured when DEVICE_KEYS is missing", async () => {
+  const res = await app.fetch(tokenRequest(ROBOT), { ...env, DEVICE_KEYS: undefined });
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error, "server_not_configured");
+  assert.equal(calls.length, 0);
+});
