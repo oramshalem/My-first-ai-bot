@@ -58,5 +58,5 @@ Keep these in your password manager:
   Robot        device id: robot-1        secret: ${robotSecret}
   Logs screen  password:  ${adminPassword}
 
-Next: npm run local, then open http://localhost:8787
+Next: npm run local, then Ctrl+click the test page link it prints.
 `);

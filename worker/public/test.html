@@ -136,7 +136,21 @@ function report(kind, text = null, ms = null) {
   }).catch(() => {});
 }
 
-try { const saved = localStorage.getItem("deviceId"); if (saved) $("device-id").value = saved; } catch {}
+// `npm run local` prints a link like /#device=browser-test&secret=... that fills the form.
+// The part after # never reaches the server; we drop it from the address bar right away.
+(function fillForm() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (params.has("secret")) {
+    $("device-id").value = params.get("device") ?? "browser-test";
+    $("device-secret").value = params.get("secret");
+    history.replaceState(null, "", location.pathname);
+    return;
+  }
+  try {
+    $("device-id").value = localStorage.getItem("deviceId") || $("device-id").value;
+    $("device-secret").value = localStorage.getItem("deviceSecret") || "";
+  } catch {}
+})();
 
 function setStatus(text, isError = false) {
   $("status").textContent = text;
@@ -190,8 +204,7 @@ function fail(message) {
 async function connect() {
   $("connect").disabled = true;
   const deviceId = $("device-id").value.trim();
-  const secret = $("device-secret").value;
-  try { localStorage.setItem("deviceId", deviceId); } catch {}
+  const secret = $("device-secret").value.trim();
   // Created inside the click so the browser allows audio playback.
   audioIn = new AudioContext({ sampleRate: GEMINI_RATE_IN });
   audioOut = new AudioContext({ sampleRate: GEMINI_RATE_OUT });
@@ -202,10 +215,11 @@ async function connect() {
       method: "POST",
       headers: { "x-device-id": deviceId, authorization: "Bearer " + secret },
     });
-    if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים");
+    if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים. פתח את הקישור ש-npm run local מדפיס");
     if (tokenRes.status === 503) throw new Error("השרת לא מוגדר: חסר קובץ .dev.vars. עצור את השרת, הרץ npm run setup-local ואז npm run local");
     if (!tokenRes.ok) throw new Error("השרת החזיר " + tokenRes.status + ". הפרטים במסך הלוגים");
     const token = await tokenRes.json();
+    try { localStorage.setItem("deviceId", deviceId); localStorage.setItem("deviceSecret", secret); } catch {}
     session = { id: token.session_id, deviceId, secret };
     log(`token ok, ${token.provider} ${token.model}, session ${token.session_id}`);
     report("status", "browser: " + navigator.userAgent);

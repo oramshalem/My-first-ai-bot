@@ -1,4 +1,5 @@
 // Checks worker/.dev.vars without printing any secret, and says how to fix what is wrong.
+// With --link (used by `npm run local`) it also prints a link that fills in the test page.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -65,4 +66,10 @@ if (problems.length) {
   console.log("\nFix: delete worker/.dev.vars, run npm run setup-local, then restart npm run local.");
   process.exit(1);
 }
-console.log("\nAll good. Restart npm run local if it is running, so it picks up the file.");
+if (process.argv.includes("--link")) {
+  const secret = JSON.parse(vars.DEVICE_KEYS)["browser-test"];
+  console.log(`\nTest page (Ctrl+click): http://localhost:8787/#device=browser-test&secret=${encodeURIComponent(secret)}`);
+  console.log("Logs screen:            http://localhost:8787/logs\n");
+} else {
+  console.log("\nAll good. Restart npm run local if it is running, so it picks up the file.");
+}
