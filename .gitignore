@@ -1,0 +1,30 @@
+# ESP-IDF
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# PlatformIO
+.pio/
+
+# Cloudflare Worker
+node_modules/
+.wrangler/
+.dev.vars
+
+# Python
+__pycache__/
+.venv/
+
+# Secrets
+.env
+.env.*
+secrets.*
+*.pem
+*.key
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
