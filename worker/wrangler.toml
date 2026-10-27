@@ -8,13 +8,22 @@ type = "Text"
 globs = ["**/*.txt", "**/*.html"]
 fallthrough = true
 
-# Settings that are not secret. OPENAI_API_KEY and DEVICE_KEYS are set with
-# `wrangler secret put` (or .dev.vars locally) and never live in this file.
+# Settings that are not secret. API keys, DEVICE_KEYS and ADMIN_PASSWORD are set
+# with `wrangler secret put` (or .dev.vars locally) and never live in this file.
 [vars]
-MODEL = "gpt-realtime-2.1-mini"
-VOICE = "marin"
-TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+# Which provider /token uses: "gemini" or "openai".
+PROVIDER = "gemini"
 TOKEN_TTL_SECONDS = "120"
+
+GEMINI_MODEL = "gemini-3.8-live"
+GEMINI_VOICE = "Puck"
+# Google's docs disagree on v1alpha vs v1beta for constrained tokens. If the
+# token request fails with 404, try "v1beta".
+GEMINI_API_VERSION = "v1alpha"
+
+OPENAI_MODEL = "gpt-realtime-2.1-mini"
+OPENAI_VOICE = "marin"
+OPENAI_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
 
 # Text-only conversation log. On the first `wrangler deploy` the database is
 # created automatically; tables are created by the Worker on first use.

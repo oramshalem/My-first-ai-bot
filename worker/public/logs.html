@@ -147,7 +147,7 @@ async function load() {
   }
 }
 
-function render({ sessions, rejected, model, voice }) {
+function render({ sessions, rejected, provider, model, voice }) {
   let latencySum = 0, latencyCount = 0, errors = 0, totalMs = 0;
   for (const s of sessions) {
     if (s.latency_count) { latencySum += s.avg_latency_ms * s.latency_count; latencyCount += s.latency_count; }
@@ -159,7 +159,7 @@ function render({ sessions, rejected, model, voice }) {
   $("s-latency").replaceChildren(latencyCount ? latencyNode(latencySum / latencyCount) : "-");
   $("s-errors").textContent = errors;
   $("s-config").replaceChildren(
-    "הגדרות נוכחיות: מודל ", el("bdi", {}, model), ", קול ", el("bdi", {}, voice),
+    "הגדרות נוכחיות: ", el("bdi", {}, provider), ", מודל ", el("bdi", {}, model), ", קול ", el("bdi", {}, voice),
     `. ${latencyCount} מדידות זמן תגובה, היעד עד 1.5 שניות.`);
   $("updated").textContent = "עודכן " + fmtClock(Date.now());
 
@@ -174,7 +174,7 @@ function render({ sessions, rejected, model, voice }) {
   $("rejected").replaceChildren(rejected.length
     ? el("ul", {}, ...rejected.map((r) => el("li", {},
         el("span", { className: "muted" }, fmtTime(r.at) + "  "),
-        r.kind === "auth_failed" ? `נדחה: מכשיר "${r.text || "ללא מזהה"}"` : `תקלה מול OpenAI: ${r.text}`)))
+        r.kind === "auth_failed" ? `נדחה: מכשיר "${r.text || "ללא מזהה"}"` : `תקלה מול ספק ה-AI: ${r.text}`)))
     : el("p", { className: "muted" }, "אין"));
 }
 

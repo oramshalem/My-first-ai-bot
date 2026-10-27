@@ -32,6 +32,7 @@
   button.secondary { background: transparent; color: var(--accent); }
   button:disabled { opacity: .4; cursor: default; }
   #status { color: var(--muted); }
+  .hint { color: var(--muted); font-size: .85rem; margin: 10px 0 0; }
   #status.error { color: var(--error); }
   #transcript { display: grid; gap: 6px; max-height: 360px; overflow-y: auto; }
   .msg { padding: 6px 10px; border-radius: 8px; }
@@ -67,6 +68,7 @@
       <button id="disconnect" class="secondary" disabled>סיים</button>
       <span id="status">לא מחובר</span>
     </div>
+    <p class="hint">עם Gemini כדאי לדבר עם אוזניות, כדי שפיקו לא ישמע את עצמו מהרמקולים ויקטע את עצמו.</p>
   </section>
 
   <section>
@@ -78,7 +80,7 @@
     <h2>זמן תגובה</h2>
     <div id="latency-summary" class="empty">עוד אין מדידות</div>
     <div id="latency-list"></div>
-    <label>מסוף הדיבור (לפי ה-VAD של OpenAI) עד שהאודיו של התשובה מתחיל להגיע. היעד הוא עד 1.5 שניות בממוצע.</label>
+    <label>מסוף הדיבור עד שהאודיו של התשובה מתחיל להגיע. היעד הוא עד 1.5 שניות בממוצע. ב-OpenAI סוף הדיבור נקבע לפי הזיהוי שלהם, וב-Gemini לפי עוצמת הקול במיקרופון.</label>
   </section>
 
   <section>
@@ -94,14 +96,30 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
-// The first of these after the child stops talking counts as "answer started".
+const GREETING = "תגיד שלום קצר ותציג את עצמך במשפט אחד.";
+// OpenAI: the first of these after the child stops talking counts as "answer started".
 const ANSWER_START_EVENTS = new Set([
   "output_audio_buffer.started", "response.output_audio.delta", "response.audio.delta",
 ]);
+// Gemini: microphone level above this counts as the child talking.
+const VOICE_RMS = 0.02;
+const GEMINI_RATE_IN = 16000, GEMINI_RATE_OUT = 24000;
+const CAPTURE_WORKLET = `
+  class Capture extends AudioWorkletProcessor {
+    process(inputs) {
+      const ch = inputs[0][0];
+      if (ch) this.port.postMessage(ch.slice(0));
+      return true;
+    }
+  }
+  registerProcessor("capture", Capture);`;
 
-let pc = null, dc = null, mic = null;
+let mic = null;
+let pc = null, dc = null;                 // OpenAI
+let ws = null, audioIn = null, audioOut = null; // Gemini
 let speechStoppedAt = null;
 let session = null; // { id, deviceId, secret } while a conversation is logged
+const latencies = [];
 
 // Everything shown on this page is also sent to the server log (see /logs).
 function report(kind, text = null, ms = null) {
@@ -117,7 +135,6 @@ function report(kind, text = null, ms = null) {
     body: JSON.stringify({ session_id: session.id, events: [{ at: Date.now(), kind, text, ms }] }),
   }).catch(() => {});
 }
-const latencies = [];
 
 try { const saved = localStorage.getItem("deviceId"); if (saved) $("device-id").value = saved; } catch {}
 
@@ -133,6 +150,7 @@ function log(line) {
 }
 
 function addMessage(who, text) {
+  text = text?.trim();
   if (!text) return;
   const box = $("transcript");
   box.querySelector(".empty")?.remove();
@@ -143,6 +161,7 @@ function addMessage(who, text) {
   div.append(label, document.createTextNode(text));
   box.append(div);
   box.scrollTop = box.scrollHeight;
+  report(who, text);
 }
 
 function recordLatency(ms) {
@@ -155,7 +174,87 @@ function recordLatency(ms) {
   $("latency-list").textContent = latencies.map((x) => (x / 1000).toFixed(2) + "s").join("  ");
 }
 
-function handleEvent(ev) {
+function connected(model) {
+  setStatus(`מחובר ל-${model}. אפשר לדבר`);
+  report("status", "connected");
+  $("disconnect").disabled = false;
+}
+
+function fail(message) {
+  setStatus(message, true);
+  log("error: " + message);
+  report("error", message);
+  disconnect(false);
+}
+
+async function connect() {
+  $("connect").disabled = true;
+  const deviceId = $("device-id").value.trim();
+  const secret = $("device-secret").value;
+  try { localStorage.setItem("deviceId", deviceId); } catch {}
+  // Created inside the click so the browser allows audio playback.
+  audioIn = new AudioContext({ sampleRate: GEMINI_RATE_IN });
+  audioOut = new AudioContext({ sampleRate: GEMINI_RATE_OUT });
+
+  try {
+    setStatus("מבקש טוקן...");
+    const tokenRes = await fetch("/token", {
+      method: "POST",
+      headers: { "x-device-id": deviceId, authorization: "Bearer " + secret },
+    });
+    if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים");
+    if (!tokenRes.ok) throw new Error("השרת החזיר " + tokenRes.status + ". הפרטים במסך הלוגים");
+    const token = await tokenRes.json();
+    session = { id: token.session_id, deviceId, secret };
+    log(`token ok, ${token.provider} ${token.model}, session ${token.session_id}`);
+    report("status", "browser: " + navigator.userAgent);
+
+    setStatus("מבקש גישה למיקרופון...");
+    mic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+
+    if (token.provider === "gemini") await connectGemini(token);
+    else await connectOpenAI(token);
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+// ---------- OpenAI: WebRTC, audio handled by the browser ----------
+
+async function connectOpenAI({ client_secret, model }) {
+  pc = new RTCPeerConnection();
+  pc.ontrack = (e) => { $("remote-audio").srcObject = e.streams[0]; };
+  pc.onconnectionstatechange = () => {
+    log("connection: " + pc?.connectionState);
+    if (pc?.connectionState === "failed" || pc?.connectionState === "disconnected") {
+      fail("החיבור נפל (" + pc.connectionState + ")");
+    }
+  };
+  mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+
+  dc = pc.createDataChannel("oai-events");
+  dc.onmessage = (e) => handleOpenAIEvent(JSON.parse(e.data));
+  dc.onopen = () => {
+    connected(model);
+    // Let the character greet first, like the robot will when it wakes up.
+    dc.send(JSON.stringify({ type: "response.create", response: { instructions: GREETING } }));
+  };
+
+  setStatus("מתחבר ל-OpenAI...");
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  const sdpRes = await fetch(OPENAI_CALLS_URL, {
+    method: "POST",
+    body: offer.sdp,
+    headers: { authorization: "Bearer " + client_secret, "content-type": "application/sdp" },
+  });
+  if (!sdpRes.ok) throw new Error("OpenAI החזיר " + sdpRes.status + ": " + (await sdpRes.text()));
+  await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
+}
+
+function handleOpenAIEvent(ev) {
   if (ev.type !== "response.output_audio_transcript.delta" && ev.type !== "response.audio_transcript.delta") {
     log(ev.type);
   }
@@ -166,10 +265,8 @@ function handleEvent(ev) {
     speechStoppedAt = null;
   } else if (ev.type === "conversation.item.input_audio_transcription.completed") {
     addMessage("kid", ev.transcript);
-    report("kid", ev.transcript);
   } else if (ev.type === "response.output_audio_transcript.done" || ev.type === "response.audio_transcript.done") {
     addMessage("robot", ev.transcript);
-    report("robot", ev.transcript);
   } else if (ev.type === "error") {
     setStatus("שגיאה: " + (ev.error?.message ?? "לא ידועה"), true);
     log(JSON.stringify(ev));
@@ -177,75 +274,173 @@ function handleEvent(ev) {
   }
 }
 
-async function connect() {
-  $("connect").disabled = true;
-  const deviceId = $("device-id").value.trim();
-  const secret = $("device-secret").value;
-  try { localStorage.setItem("deviceId", deviceId); } catch {}
+// ---------- Gemini: WebSocket, we capture and play PCM ourselves ----------
 
-  try {
-    setStatus("מבקש טוקן...");
-    const tokenRes = await fetch("/token", {
-      method: "POST",
-      headers: { "x-device-id": deviceId, authorization: "Bearer " + secret },
-    });
-    if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים");
-    if (!tokenRes.ok) throw new Error("השרת החזיר " + tokenRes.status);
-    const { client_secret, model, session_id } = await tokenRes.json();
-    session = { id: session_id, deviceId, secret };
-    log("token ok, model " + model + ", session " + session_id);
-    report("status", "browser: " + navigator.userAgent);
+const gemini = {
+  ready: false,
+  pending: [],      // mic samples waiting to be sent
+  kidText: "",
+  robotText: "",
+  lastVoiceAt: null, // when the mic last heard the child (not the speaker)
+  awaitingAnswer: false,
+  playHead: 0,
+  sources: new Set(),
+};
 
-    setStatus("מבקש גישה למיקרופון...");
-    mic = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+async function connectGemini({ token, ws_url, model }) {
+  Object.assign(gemini, { ready: false, pending: [], kidText: "", robotText: "", lastVoiceAt: null, awaitingAnswer: false, playHead: 0 });
 
-    pc = new RTCPeerConnection();
-    pc.ontrack = (e) => { $("remote-audio").srcObject = e.streams[0]; };
-    pc.onconnectionstatechange = () => {
-      log("connection: " + pc.connectionState);
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        setStatus("החיבור נפל", true);
-        report("error", "connection " + pc.connectionState);
-      }
-    };
-    mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+  const workletUrl = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "application/javascript" }));
+  await audioIn.audioWorklet.addModule(workletUrl);
+  const capture = new AudioWorkletNode(audioIn, "capture");
+  capture.port.onmessage = (e) => onMicSamples(e.data);
+  audioIn.createMediaStreamSource(mic).connect(capture);
+  capture.connect(audioIn.destination); // silent, keeps the worklet running
 
-    dc = pc.createDataChannel("oai-events");
-    dc.onmessage = (e) => handleEvent(JSON.parse(e.data));
-    dc.onopen = () => {
-      setStatus("מחובר. אפשר לדבר");
-      report("status", "connected");
-      $("disconnect").disabled = false;
-      // Let the character greet first, like the robot will when it wakes up.
-      dc.send(JSON.stringify({
-        type: "response.create",
-        response: { instructions: "תגיד שלום קצר ותציג את עצמך במשפט אחד." },
-      }));
-    };
+  setStatus("מתחבר ל-Gemini...");
+  ws = new WebSocket(ws_url + "?access_token=" + encodeURIComponent(token));
+  ws.onopen = () => {
+    // The real setup (prompt, voice, transcription) is locked into the token by the server.
+    ws.send(JSON.stringify({ setup: { model: "models/" + model } }));
+  };
+  ws.onmessage = async (e) => {
+    const text = typeof e.data === "string" ? e.data : await e.data.text();
+    handleGeminiMessage(JSON.parse(text), model);
+  };
+  ws.onclose = (e) => {
+    log(`ws closed ${e.code} ${e.reason}`);
+    if (ws) fail(`Gemini סגר את החיבור (${e.code}${e.reason ? ": " + e.reason : ""})`);
+  };
+}
 
-    setStatus("מתחבר ל-OpenAI...");
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const sdpRes = await fetch(OPENAI_CALLS_URL, {
-      method: "POST",
-      body: offer.sdp,
-      headers: { authorization: "Bearer " + client_secret, "content-type": "application/sdp" },
-    });
-    if (!sdpRes.ok) throw new Error("OpenAI החזיר " + sdpRes.status + ": " + (await sdpRes.text()));
-    await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
-  } catch (err) {
-    setStatus(err.message, true);
-    log("error: " + err.message);
-    report("error", err.message);
-    disconnect(false);
+function handleGeminiMessage(msg, model) {
+  if (msg.setupComplete) {
+    log("setupComplete");
+    gemini.ready = true;
+    connected(model);
+    ws.send(JSON.stringify({
+      clientContent: { turns: [{ role: "user", parts: [{ text: GREETING }] }], turnComplete: true },
+    }));
+    return;
+  }
+  if (msg.goAway) {
+    log("goAway " + JSON.stringify(msg.goAway));
+    setStatus("Gemini יסגור את החיבור בקרוב. אפשר להתחיל שיחה חדשה", true);
+    return;
+  }
+  const sc = msg.serverContent;
+  if (!sc) return;
+
+  if (sc.inputTranscription?.text) gemini.kidText += sc.inputTranscription.text;
+  if (sc.outputTranscription?.text) gemini.robotText += sc.outputTranscription.text;
+
+  for (const part of sc.modelTurn?.parts ?? []) {
+    if (!part.inlineData?.mimeType?.startsWith("audio/")) continue;
+    if (gemini.awaitingAnswer && gemini.lastVoiceAt !== null) {
+      recordLatency(performance.now() - gemini.lastVoiceAt);
+      gemini.awaitingAnswer = false;
+    }
+    playPcm(part.inlineData.data);
+  }
+  if (sc.interrupted) {
+    // The child talked over the robot: keep what it said so far, then listen.
+    log("interrupted");
+    stopPlayback();
+    flushGeminiRobot();
+  }
+  if (sc.turnComplete) {
+    log("turnComplete");
+    flushGeminiKid();
+    flushGeminiRobot();
   }
 }
 
+function flushGeminiKid() {
+  if (gemini.kidText) { addMessage("kid", gemini.kidText); gemini.kidText = ""; }
+}
+
+function flushGeminiRobot() {
+  if (gemini.robotText) { addMessage("robot", gemini.robotText); gemini.robotText = ""; }
+}
+
+function onMicSamples(samples) {
+  let sum = 0;
+  for (const x of samples) sum += x * x;
+  // Ignore loud input while the robot is talking, it is probably the speaker.
+  if (Math.sqrt(sum / samples.length) > VOICE_RMS && !isPlaying()) {
+    gemini.lastVoiceAt = performance.now();
+    gemini.awaitingAnswer = true;
+  }
+  if (!gemini.ready) return;
+  gemini.pending.push(samples);
+  const total = gemini.pending.reduce((n, c) => n + c.length, 0);
+  if (total < GEMINI_RATE_IN / 10) return; // send every ~100 ms
+  const chunk = new Float32Array(total);
+  let offset = 0;
+  for (const c of gemini.pending) { chunk.set(c, offset); offset += c.length; }
+  gemini.pending = [];
+  ws.send(JSON.stringify({
+    realtimeInput: { audio: { data: floatToPcmBase64(chunk), mimeType: "audio/pcm;rate=" + GEMINI_RATE_IN } },
+  }));
+}
+
+function floatToPcmBase64(f32) {
+  const pcm = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const x = Math.max(-1, Math.min(1, f32[i]));
+    pcm[i] = x < 0 ? x * 0x8000 : x * 0x7fff;
+  }
+  const bytes = new Uint8Array(pcm.buffer);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function playPcm(base64) {
+  const bin = atob(base64);
+  const pcm = new Int16Array(bin.length >> 1);
+  for (let i = 0; i < pcm.length; i++) {
+    const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    pcm[i] = v >= 0x8000 ? v - 0x10000 : v;
+  }
+  const buffer = audioOut.createBuffer(1, pcm.length, GEMINI_RATE_OUT);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 0x8000;
+
+  const src = audioOut.createBufferSource();
+  src.buffer = buffer;
+  src.connect(audioOut.destination);
+  const start = Math.max(audioOut.currentTime, gemini.playHead);
+  src.start(start);
+  gemini.playHead = start + buffer.duration;
+  gemini.sources.add(src);
+  src.onended = () => gemini.sources.delete(src);
+}
+
+function isPlaying() {
+  return audioOut !== null && gemini.playHead > audioOut.currentTime;
+}
+
+function stopPlayback() {
+  for (const src of gemini.sources) src.stop();
+  gemini.sources.clear();
+  gemini.playHead = 0;
+}
+
+// ---------- shared ----------
+
 function disconnect(resetStatus = true) {
+  if (gemini.kidText || gemini.robotText) { flushGeminiKid(); flushGeminiRobot(); }
   report("end");
   session = null;
+  const socket = ws;
+  ws = null; // so onclose does not report this as a failure
+  socket?.close();
+  stopPlayback();
+  gemini.ready = false;
+  audioIn?.close();
+  audioOut?.close();
+  audioIn = audioOut = null;
   dc?.close();
   pc?.close();
   mic?.getTracks().forEach((t) => t.stop());

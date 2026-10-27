@@ -4,12 +4,17 @@ import { createApp } from "../src/app.js";
 import { createFakeD1 } from "./fake-d1.js";
 
 const baseEnv = {
+  PROVIDER: "openai",
   OPENAI_API_KEY: "sk-test",
+  GEMINI_API_KEY: "AIza-test",
   ADMIN_PASSWORD: "parent-pass",
   DEVICE_KEYS: JSON.stringify({ "robot-1": "s3cret" }),
-  MODEL: "gpt-realtime-2.1-mini",
-  VOICE: "marin",
-  TRANSCRIBE_MODEL: "gpt-4o-mini-transcribe",
+  OPENAI_MODEL: "gpt-realtime-2.1-mini",
+  OPENAI_VOICE: "marin",
+  OPENAI_TRANSCRIBE_MODEL: "gpt-4o-mini-transcribe",
+  GEMINI_MODEL: "gemini-3.8-live",
+  GEMINI_VOICE: "Puck",
+  GEMINI_API_VERSION: "v1alpha",
   TOKEN_TTL_SECONDS: "120",
 };
 
@@ -93,6 +98,7 @@ test("issues a client secret for a known device", async () => {
   );
   assert.equal(res.status, 200);
   const data = await res.json();
+  assert.equal(data.provider, "openai");
   assert.equal(data.client_secret, "ek_abc");
   assert.equal(data.expires_at, 1234);
   assert.equal(data.model, "gpt-realtime-2.1-mini");
@@ -180,7 +186,7 @@ test("records OpenAI failures", async () => {
   await app.fetch(tokenRequest(ROBOT), env);
   const list = await (await app.fetch(adminGet("/api/sessions"), env)).json();
   assert.equal(list.rejected[0].kind, "upstream_error");
-  assert.equal(list.rejected[0].text, "429 quota");
+  assert.equal(list.rejected[0].text, "openai 429 quota");
 });
 
 test("a device cannot write to another device's session", async () => {
@@ -214,4 +220,44 @@ for (const [name, password, extraEnv] of [
 test("serves the logs page", async () => {
   const res = await app.fetch(new Request("https://worker.test/logs"), env);
   assert.equal(await res.text(), "<html>logs</html>");
+});
+
+test("issues a locked Gemini token when PROVIDER is gemini", async () => {
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return Response.json({ name: "auth_tokens/xyz", expireTime: "2026-10-27T12:30:00Z" });
+  };
+  const geminiEnv = { ...env, PROVIDER: "gemini" };
+  const res = await app.fetch(tokenRequest(ROBOT), geminiEnv);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.provider, "gemini");
+  assert.equal(data.model, "gemini-3.8-live");
+  assert.equal(data.token, "auth_tokens/xyz");
+  assert.equal(
+    data.ws_url,
+    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+  );
+  assert.equal(data.expires_at, Date.parse("2026-10-27T12:30:00Z") / 1000);
+  assert.ok(data.session_id);
+
+  assert.equal(calls[0].url, "https://generativelanguage.googleapis.com/v1alpha/auth_tokens");
+  assert.equal(calls[0].init.headers["x-goog-api-key"], "AIza-test");
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.uses, 1);
+  const setup = body.bidiGenerateContentSetup;
+  assert.equal(setup.model, "models/gemini-3.8-live");
+  assert.equal(setup.systemInstruction.parts[0].text, "PROMPT");
+  assert.deepEqual(setup.generationConfig.responseModalities, ["AUDIO"]);
+  assert.equal(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, "Puck");
+  assert.deepEqual(setup.inputAudioTranscription, {});
+
+  const list = await (await app.fetch(adminGet("/api/sessions"), geminiEnv)).json();
+  assert.equal(list.provider, "gemini");
+  assert.equal(list.sessions[0].model, "gemini-3.8-live");
+});
+
+test("gemini is the default provider", async () => {
+  await app.fetch(tokenRequest(ROBOT), { ...env, PROVIDER: undefined });
+  assert.match(calls[0].url, /generativelanguage/);
 });

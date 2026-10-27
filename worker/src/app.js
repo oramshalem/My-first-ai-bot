@@ -2,8 +2,7 @@
 // tested with plain `node --test`.
 
 import { initSchema, createSession, addEvents, sessionBelongsTo, listSessions, listRejected, sessionEvents } from "./db.js";
-
-const OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets";
+import { providerFor } from "./providers.js";
 
 export function createApp({ instructions, testPage, logsPage }) {
   return {
@@ -22,7 +21,7 @@ export function createApp({ instructions, testPage, logsPage }) {
 }
 
 // The device sends its id in X-Device-Id and its secret as a bearer token.
-// On success it gets a short-lived OpenAI client secret, never the API key.
+// On success it gets a short-lived provider token, never the API key.
 async function handleToken(request, env, instructions) {
   const deviceId = request.headers.get("x-device-id") ?? "";
   if (!(await authenticateDevice(request, env))) {
@@ -30,37 +29,36 @@ async function handleToken(request, env, instructions) {
     return json({ error: "unauthorized" }, 401);
   }
 
+  const provider = providerFor(env);
   let upstream;
   try {
-    upstream = await fetch(OPENAI_CLIENT_SECRETS_URL, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.OPENAI_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(sessionConfig(env, instructions)),
-    });
+    upstream = await fetch(...provider.tokenRequest(env, instructions));
   } catch (err) {
-    console.error("OpenAI request failed", err);
-    await safeLog(env, () => addEvents(env.DB, null, [{ kind: "upstream_error", text: String(err) }]));
+    console.error(`${provider.name} request failed`, err);
+    await safeLog(env, () => addEvents(env.DB, null, [{ kind: "upstream_error", text: `${provider.name}: ${err}` }]));
     return json({ error: "upstream_unreachable" }, 502);
   }
 
   if (!upstream.ok) {
     const body = await upstream.text();
-    console.error("OpenAI client_secrets error", upstream.status, body);
-    await safeLog(env, () => addEvents(env.DB, null, [{ kind: "upstream_error", text: `${upstream.status} ${body}` }]));
+    console.error(`${provider.name} token error`, upstream.status, body);
+    await safeLog(env, () =>
+      addEvents(env.DB, null, [{ kind: "upstream_error", text: `${provider.name} ${upstream.status} ${body}` }]),
+    );
     return json({ error: "upstream_error" }, 502);
   }
 
   const data = await upstream.json();
-  const sessionId = await safeLog(env, () => createSession(env.DB, { deviceId, model: env.MODEL, voice: env.VOICE }));
-  console.log("token issued", { deviceId, model: env.MODEL, sessionId });
+  const model = provider.model(env);
+  const sessionId = await safeLog(env, () =>
+    createSession(env.DB, { deviceId, model, voice: provider.voice(env) }),
+  );
+  console.log("token issued", { deviceId, provider: provider.name, model, sessionId });
   return json({
-    client_secret: data.value,
-    expires_at: data.expires_at,
-    model: env.MODEL,
+    provider: provider.name,
+    model,
     session_id: sessionId ?? null,
+    ...provider.tokenResponse(env, data),
   });
 }
 
@@ -89,31 +87,12 @@ async function handleApi(request, env, pathname) {
 
   if (pathname === "/api/sessions") {
     const [sessions, rejected] = await Promise.all([listSessions(env.DB), listRejected(env.DB)]);
-    return json({ sessions, rejected, model: env.MODEL, voice: env.VOICE });
+    const provider = providerFor(env);
+    return json({ sessions, rejected, provider: provider.name, model: provider.model(env), voice: provider.voice(env) });
   }
   const match = pathname.match(/^\/api\/sessions\/([\w-]+)$/);
   if (match) return json({ events: await sessionEvents(env.DB, match[1]) });
   return json({ error: "not_found" }, 404);
-}
-
-export function sessionConfig(env, instructions) {
-  return {
-    expires_after: { anchor: "created_at", seconds: Number(env.TOKEN_TTL_SECONDS) || 120 },
-    session: {
-      type: "realtime",
-      model: env.MODEL,
-      instructions,
-      audio: {
-        input: {
-          // Text transcript of what the child said, for the parent log.
-          transcription: { model: env.TRANSCRIBE_MODEL, language: "he" },
-          // Semantic VAD copes better with children pausing mid-sentence.
-          turn_detection: { type: "semantic_vad", eagerness: "auto" },
-        },
-        output: { voice: env.VOICE },
-      },
-    },
-  };
 }
 
 // DEVICE_KEYS is a JSON object secret: {"robot-1": "<secret>", "browser-test": "<secret>"}.

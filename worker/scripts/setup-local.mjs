@@ -1,8 +1,8 @@
 // Creates .dev.vars for running the server on your own computer.
-// Generates the device secrets and the logs password, and asks only for the OpenAI key.
+// Generates the device secrets and the logs password, and asks only for the API keys.
 import { existsSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { createInterface } from "node:readline/promises";
+import { createInterface } from "node:readline";
 
 const FILE = new URL("../.dev.vars", import.meta.url);
 
@@ -11,10 +11,21 @@ if (existsSync(FILE)) {
   process.exit(1);
 }
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-const apiKey = (await rl.question("Paste your OpenAI API key (sk-...): ")).trim();
+const rl = createInterface({ input: process.stdin });
+const lines = rl[Symbol.asyncIterator]();
+async function ask(question) {
+  process.stdout.write(question);
+  const { value } = await lines.next();
+  return (value ?? "").trim();
+}
+const geminiKey = await ask("Paste your Gemini API key from aistudio.google.com (AIza...): ");
+const openaiKey = await ask("OpenAI API key (optional, press Enter to skip): ");
 rl.close();
-if (!apiKey.startsWith("sk-")) {
+if (!geminiKey.startsWith("AIza")) {
+  console.log("That does not look like a Gemini key. Nothing was written.");
+  process.exit(1);
+}
+if (openaiKey && !openaiKey.startsWith("sk-")) {
   console.log("That does not look like an OpenAI key. Nothing was written.");
   process.exit(1);
 }
@@ -27,7 +38,8 @@ const adminPassword = secret();
 writeFileSync(
   FILE,
   [
-    `OPENAI_API_KEY=${apiKey}`,
+    `GEMINI_API_KEY=${geminiKey}`,
+    ...(openaiKey ? [`OPENAI_API_KEY=${openaiKey}`] : []),
     `DEVICE_KEYS=${JSON.stringify({ "browser-test": browserSecret, "robot-1": robotSecret })}`,
     `ADMIN_PASSWORD=${adminPassword}`,
     "",
