@@ -5,12 +5,16 @@
   "scripts": {
     "setup-local": "node scripts/setup-local.mjs",
     "check-local": "node scripts/check-local.mjs",
-    "local": "node scripts/check-local.mjs --link && wrangler dev --ip 0.0.0.0 --port 8787",
+    "local": "node scripts/check-local.mjs --link && node scripts/run-local.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "node --test"
   },
   "devDependencies": {
     "wrangler": "4.153.0"
+  },
+  "dependencies": {
+    "opusscript": "0.1.1",
+    "ws": "8.22.0"
   }
 }

@@ -44,6 +44,7 @@ if (!vars.DEVICE_KEYS) {
     } else {
       ok.push(`DEVICE_KEYS is valid JSON with devices: ${ids.join(", ")}`);
       if (!ids.includes("browser-test")) problems.push("There is no \"browser-test\" device, so the test page cannot log in.");
+      if (!ids.includes("robot-1")) problems.push("There is no \"robot-1\" device, so the robot bridge cannot get a token.");
     }
   } catch (err) {
     problems.push(`DEVICE_KEYS is not valid JSON (${err.message}).`);
