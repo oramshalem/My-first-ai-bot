@@ -51,8 +51,8 @@ if (!vars.DEVICE_KEYS) {
 
 if (!vars.GEMINI_API_KEY) problems.push("GEMINI_API_KEY is missing, and Gemini is the default provider.");
 if (vars.GEMINI_API_KEY) {
-  if (vars.GEMINI_API_KEY.startsWith("AIza")) ok.push("GEMINI_API_KEY looks right");
-  else problems.push("GEMINI_API_KEY does not start with AIza.");
+  if (/^(AQ\.|AIza)/.test(vars.GEMINI_API_KEY)) ok.push("GEMINI_API_KEY looks right");
+  else ok.push("GEMINI_API_KEY is set (unusual prefix, Google will tell if it is wrong)");
 }
 if (vars.OPENAI_API_KEY) ok.push("OPENAI_API_KEY is set");
 if (vars.ADMIN_PASSWORD) ok.push("ADMIN_PASSWORD is set");

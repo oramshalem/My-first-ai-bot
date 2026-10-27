@@ -18,12 +18,16 @@ async function ask(question) {
   const { value } = await lines.next();
   return (value ?? "").trim();
 }
-const geminiKey = await ask("Paste your Gemini API key from aistudio.google.com (AIza...): ");
+const geminiKey = await ask("Paste your Gemini API key from aistudio.google.com (starts with AQ. or AIza): ");
 const openaiKey = await ask("OpenAI API key (optional, press Enter to skip): ");
 rl.close();
-if (!geminiKey.startsWith("AIza")) {
-  console.log("That does not look like a Gemini key. Nothing was written.");
+// AI Studio used to issue AIza... keys and now issues AQ. keys. Both work.
+if (!geminiKey || /\s/.test(geminiKey)) {
+  console.log("The Gemini key is empty or has spaces in it. Nothing was written.");
   process.exit(1);
+}
+if (!/^(AQ\.|AIza)/.test(geminiKey)) {
+  console.log("Note: this key does not start with AQ. or AIza. Saving it anyway; if Google rejects it, the reason will show on the logs screen.");
 }
 if (openaiKey && !openaiKey.startsWith("sk-")) {
   console.log("That does not look like an OpenAI key. Nothing was written.");
