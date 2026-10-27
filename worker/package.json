@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup-local": "node scripts/setup-local.mjs",
+    "local": "wrangler dev --ip 0.0.0.0 --port 8787",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "node --test"
