@@ -2,8 +2,8 @@
 // short-lived token request, so the API key never leaves the server.
 // PROVIDER in wrangler.toml picks which one /token uses.
 //
+// mode "auto" (default): always listening, the provider detects the end of speech.
 // mode "push": the device says when the child starts and stops talking (push to talk).
-// mode "auto": the provider detects the end of speech by itself.
 
 const OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets";
 const GEMINI_HOST = "generativelanguage.googleapis.com";
@@ -32,7 +32,8 @@ export const openai = {
             transcription: { model: env.OPENAI_TRANSCRIBE_MODEL, language: "he" },
             // Semantic VAD copes better with children pausing mid-sentence.
             // In push mode the client commits the audio buffer itself.
-            turn_detection: mode === "push" ? null : { type: "semantic_vad", eagerness: "auto" },
+            // "low" waits longer before answering, so a pause mid-sentence is not taken as the end.
+            turn_detection: mode === "push" ? null : { type: "semantic_vad", eagerness: "low" },
           },
           output: { voice: env.OPENAI_VOICE },
         },
@@ -79,8 +80,7 @@ export const gemini = {
           ? { languageCodes: [env.GEMINI_TRANSCRIBE_LANGUAGE] }
           : {},
         outputAudioTranscription: {},
-        // In push mode the client sends activityStart / activityEnd itself.
-        ...(mode === "push" && { realtimeInputConfig: { automaticActivityDetection: { disabled: true } } }),
+        ...geminiActivityDetection(env, mode),
       },
     };
     return [
@@ -102,3 +102,19 @@ export const gemini = {
     };
   },
 };
+
+function geminiActivityDetection(env, mode) {
+  // In push mode the client sends activityStart / activityEnd itself.
+  if (mode === "push") return { realtimeInputConfig: { automaticActivityDetection: { disabled: true } } };
+  // Children pause mid-sentence. Wait for a longer silence, and be less eager to call it the end.
+  // GEMINI_SILENCE_MS = "" leaves Gemini's own defaults.
+  if (!env.GEMINI_SILENCE_MS) return {};
+  return {
+    realtimeInputConfig: {
+      automaticActivityDetection: {
+        endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
+        silenceDurationMs: Number(env.GEMINI_SILENCE_MS),
+      },
+    },
+  };
+}

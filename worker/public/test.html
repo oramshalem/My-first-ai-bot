@@ -74,11 +74,11 @@
       <span id="status">לא מחובר</span>
     </div>
     <div class="mode">
-      <label><input type="radio" name="mode" value="push" checked> לחץ ודבר, כמו ברובוט</label>
-      <label><input type="radio" name="mode" value="auto"> דיבור חופשי</label>
+      <label><input type="radio" name="mode" value="auto" checked> מקשיב כל הזמן</label>
+      <label><input type="radio" name="mode" value="push"> לחץ ודבר</label>
     </div>
     <button id="talk" class="talk" disabled>החזק כדי לדבר</button>
-    <p class="hint">בלחץ ודבר מחזיקים את הכפתור, או את מקש הרווח, כל זמן שמדברים, ומשחררים בסוף המשפט.</p>
+    <p class="hint">במצב "מקשיב כל הזמן" פשוט מדברים. ב"לחץ ודבר" מחזיקים את הכפתור, או את מקש הרווח, כל זמן שמדברים.</p>
     <p class="hint">עם Gemini כדאי לדבר עם אוזניות, כדי שפיקו לא ישמע את עצמו מהרמקולים ויקטע את עצמו.</p>
   </section>
 
@@ -91,7 +91,7 @@
     <h2>זמן תגובה</h2>
     <div id="latency-summary" class="empty">עוד אין מדידות</div>
     <div id="latency-list"></div>
-    <label>בלחץ ודבר: משחרור הכפתור עד שהאודיו של התשובה מתחיל להגיע. בדיבור חופשי: מסוף הדיבור, לפי הזיהוי של OpenAI או לפי עוצמת המיקרופון ב-Gemini. היעד הוא עד 1.5 שניות בממוצע. תשובה שהתחילה לפני שסיימת לדבר לא נכנסת לממוצע, ונספרת בנפרד.</label>
+    <label>במקשיב כל הזמן: מסוף הדיבור, לפי הזיהוי של OpenAI או לפי עוצמת המיקרופון ב-Gemini, כולל השקט שהוא מחכה לו כדי לוודא שסיימת. בלחץ ודבר: משחרור הכפתור עד שהאודיו של התשובה מתחיל להגיע. היעד הוא עד 1.5 שניות בממוצע. תשובה שהתחילה לפני שסיימת לדבר לא נכנסת לממוצע, ונספרת בנפרד.</label>
   </section>
 
   <section>
@@ -129,7 +129,7 @@ let mic = null;
 let pc = null, dc = null;                 // OpenAI
 let ws = null, audioIn = null, audioOut = null; // Gemini
 let speechStoppedAt = null;
-let talkMode = "push"; // "push": hold to talk, like the robot. "auto": the provider detects the end of speech.
+let talkMode = "auto"; // "auto": always listening, the provider detects the end of speech. "push": hold to talk.
 let pressing = false;
 let earlyAnswers = 0;
 // In auto mode an "answer" this fast means the provider cut in before the child finished.
@@ -165,6 +165,8 @@ function report(kind, text = null, ms = null) {
     return;
   }
   try {
+    const mode = localStorage.getItem("talkMode");
+    if (mode) document.querySelector(`input[name="mode"][value="${mode === "push" ? "push" : "auto"}"]`).checked = true;
     $("device-id").value = localStorage.getItem("deviceId") || $("device-id").value;
     $("device-secret").value = localStorage.getItem("deviceSecret") || "";
   } catch {}
@@ -243,6 +245,7 @@ async function connect() {
   const deviceId = $("device-id").value.trim();
   const secret = $("device-secret").value.trim();
   talkMode = document.querySelector('input[name="mode"]:checked').value;
+  try { localStorage.setItem("talkMode", talkMode); } catch {}
   latencies.length = 0;
   earlyAnswers = 0;
   renderLatency();
@@ -373,7 +376,7 @@ async function connectGemini({ token, ws_url, model }) {
     if (e.code === 1007 && !gemini.ready && talkMode === "push") {
       fail(`Gemini דחה את מצב לחץ ודבר (${detail}). בחר "דיבור חופשי" ונסה שוב`);
     } else if (e.code === 1007 && !gemini.ready) {
-      fail(`Gemini דחה את ההגדרות (${detail}). נסה לשנות ב-wrangler.toml את GEMINI_TRANSCRIBE_LANGUAGE ל-"" ולהפעיל מחדש`);
+      fail(`Gemini דחה את ההגדרות (${detail}). נסה לשנות ב-wrangler.toml את GEMINI_SILENCE_MS ל-"" ולהפעיל מחדש. אם זה לא עוזר, גם את GEMINI_TRANSCRIBE_LANGUAGE`);
     } else {
       fail(`Gemini סגר את החיבור (${detail})`);
     }

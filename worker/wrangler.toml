@@ -24,6 +24,9 @@ GEMINI_API_VERSION = "v1alpha"
 # understands Hebrew either way). If Gemini closes the connection with 1007,
 # set this to "" to let it auto-detect.
 GEMINI_TRANSCRIBE_LANGUAGE = "he-IL"
+# When always listening: how long a silence (ms) counts as "the child finished".
+# Longer means fewer cut-ins mid-sentence but slower answers. "" uses Gemini's default.
+GEMINI_SILENCE_MS = "700"
 
 OPENAI_MODEL = "gpt-realtime-2.1-mini"
 OPENAI_VOICE = "marin"

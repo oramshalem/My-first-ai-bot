@@ -15,6 +15,7 @@ const baseEnv = {
   GEMINI_MODEL: "gemini-3.8-live",
   GEMINI_VOICE: "Puck",
   GEMINI_API_VERSION: "v1alpha",
+  GEMINI_SILENCE_MS: "700",
   TOKEN_TTL_SECONDS: "120",
 };
 
@@ -285,7 +286,14 @@ test("push mode turns off automatic end-of-speech detection", async () => {
   assert.equal(JSON.parse(calls[1].init.body).session.audio.input.turn_detection, null);
 
   await app.fetch(push("https://worker.test/token"), { ...env, PROVIDER: "gemini" });
-  assert.equal(JSON.parse(calls[2].init.body).bidiGenerateContentSetup.realtimeInputConfig, undefined);
+  assert.deepEqual(JSON.parse(calls[2].init.body).bidiGenerateContentSetup.realtimeInputConfig, {
+    automaticActivityDetection: { endOfSpeechSensitivity: "END_SENSITIVITY_LOW", silenceDurationMs: 700 },
+  });
   await app.fetch(push("https://worker.test/token?mode=nonsense"), env);
   assert.equal(JSON.parse(calls[3].init.body).session.audio.input.turn_detection.type, "semantic_vad");
+});
+
+test("GEMINI_SILENCE_MS empty leaves Gemini's own end-of-speech defaults", async () => {
+  await app.fetch(tokenRequest(ROBOT), { ...env, PROVIDER: "gemini", GEMINI_SILENCE_MS: "" });
+  assert.equal(JSON.parse(calls[0].init.body).bidiGenerateContentSetup.realtimeInputConfig, undefined);
 });
