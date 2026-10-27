@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>לוג שיחות</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1c1c1c; --muted: #6b6b6b;
+    --border: #dddddd; --accent: #2f6fdf; --kid: #e8f0fe; --robot: #f1f8e9;
+    --good: #2e7d32; --bad: #c62828; --error-bg: #fdecea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616; --card: #202020; --text: #eeeeee; --muted: #9a9a9a;
+      --border: #333333; --accent: #6b9cff; --kid: #1e2a3d; --robot: #1f2b1d;
+      --good: #7bd17f; --bad: #ff6b6b; --error-bg: #3a1f1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  h1 { font-size: 1.4rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 0 0 8px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  input { padding: 8px 10px; font: inherit; color: inherit; background: var(--bg);
+          border: 1px solid var(--border); border-radius: 8px; direction: ltr; min-width: 0; flex: 1; }
+  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--accent);
+           background: var(--accent); color: #fff; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--accent); }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .error { color: var(--bad); }
+  form { display: flex; gap: 8px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat b { display: block; font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+  .good { color: var(--good); }
+  .bad { color: var(--bad); }
+  .session { border-top: 1px solid var(--border); padding: 10px 0; }
+  .session:first-of-type { border-top: 0; }
+  .session > button { all: unset; cursor: pointer; display: grid; width: 100%;
+                      grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .session > button:focus-visible { outline: 2px solid var(--accent); border-radius: 6px; }
+  .session .when { font-weight: 600; }
+  .session .meta { color: var(--muted); font-size: .9rem; grid-column: 1 / -1; }
+  .timeline { display: grid; gap: 6px; margin-top: 10px; }
+  .ev { padding: 6px 10px; border-radius: 8px; font-size: .95rem; }
+  .ev.kid { background: var(--kid); }
+  .ev.robot { background: var(--robot); }
+  .ev.error { background: var(--error-bg); color: var(--bad); }
+  .ev.status, .ev.latency, .ev.end { color: var(--muted); font-size: .85rem; padding: 0 10px; }
+  .ev time { color: var(--muted); font-size: .8rem; margin-inline-end: 8px; font-variant-numeric: tabular-nums; }
+  .ev b { font-weight: 600; margin-inline-end: 4px; }
+  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  ul { margin: 0; padding-inline-start: 18px; }
+  @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>לוג שיחות</h1>
+    <span class="muted"><a href="/">לדף הבדיקה</a></span>
+  </header>
+
+  <section id="login">
+    <form id="login-form">
+      <input id="password" type="password" placeholder="סיסמת הורה" autocomplete="current-password">
+      <button>כניסה</button>
+    </form>
+    <p id="login-error" class="error" hidden></p>
+  </section>
+
+  <div id="content" hidden>
+    <section>
+      <div class="stats">
+        <div class="stat"><span class="muted">שיחות</span><b id="s-sessions">0</b></div>
+        <div class="stat"><span class="muted">דקות שיחה</span><b id="s-minutes">0</b></div>
+        <div class="stat"><span class="muted">זמן תגובה ממוצע</span><b id="s-latency">-</b></div>
+        <div class="stat"><span class="muted">שגיאות</span><b id="s-errors">0</b></div>
+      </div>
+      <p class="muted" id="s-config"></p>
+    </section>
+
+    <section>
+      <header>
+        <h2>שיחות אחרונות</h2>
+        <span class="muted" id="updated"></span>
+      </header>
+      <div id="sessions"></div>
+    </section>
+
+    <section>
+      <h2>בקשות שנדחו ותקלות שרת</h2>
+      <div id="rejected"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LATENCY_TARGET_MS = 1500;
+const LABELS = { kid: "ילד:", robot: "רובוט:" };
+let password = "";
+const openSessions = new Set();
+
+try { password = sessionStorage.getItem("logsPassword") ?? ""; } catch {}
+
+async function api(path) {
+  const res = await fetch(path, { headers: { authorization: "Bearer " + password } });
+  if (res.status === 401) throw Object.assign(new Error("סיסמה שגויה"), { auth: true });
+  if (!res.ok) throw new Error("השרת החזיר " + res.status);
+  return res.json();
+}
+
+const fmtTime = (ms) => new Date(ms).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" });
+const fmtClock = (ms) => new Date(ms).toLocaleTimeString("he-IL");
+const fmtSec = (ms) => (ms / 1000).toFixed(2) + " שנ׳";
+const duration = (s) => Math.max(0, (s.last_event_at ?? s.started_at) - s.started_at);
+
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter((c) => c !== null && c !== undefined));
+  return node;
+}
+
+function latencyNode(ms) {
+  return el("span", { className: ms <= LATENCY_TARGET_MS ? "good" : "bad" }, fmtSec(ms));
+}
+
+async function load() {
+  try {
+    const data = await api("/api/sessions");
+    $("login").hidden = true;
+    $("content").hidden = false;
+    try { sessionStorage.setItem("logsPassword", password); } catch {}
+    render(data);
+  } catch (err) {
+    if (err.auth) {
+      $("login").hidden = false;
+      $("content").hidden = true;
+      if (password) { $("login-error").textContent = err.message; $("login-error").hidden = false; }
+    } else {
+      $("updated").textContent = err.message;
+    }
+  }
+}
+
+function render({ sessions, rejected, model, voice }) {
+  let latencySum = 0, latencyCount = 0, errors = 0, totalMs = 0;
+  for (const s of sessions) {
+    if (s.latency_count) { latencySum += s.avg_latency_ms * s.latency_count; latencyCount += s.latency_count; }
+    errors += s.errors ?? 0;
+    totalMs += duration(s);
+  }
+  $("s-sessions").textContent = sessions.length;
+  $("s-minutes").textContent = Math.round(totalMs / 60000);
+  $("s-latency").replaceChildren(latencyCount ? latencyNode(latencySum / latencyCount) : "-");
+  $("s-errors").textContent = errors;
+  $("s-config").replaceChildren(
+    "הגדרות נוכחיות: מודל ", el("bdi", {}, model), ", קול ", el("bdi", {}, voice),
+    `. ${latencyCount} מדידות זמן תגובה, היעד עד 1.5 שניות.`);
+  $("updated").textContent = "עודכן " + fmtClock(Date.now());
+
+  const list = $("sessions");
+  if (!sessions.length) {
+    list.replaceChildren(el("p", { className: "muted" }, "עוד אין שיחות. התחל שיחה בדף הבדיקה."));
+  } else {
+    list.replaceChildren(...sessions.map(sessionNode));
+    for (const id of openSessions) loadTimeline(id);
+  }
+
+  $("rejected").replaceChildren(rejected.length
+    ? el("ul", {}, ...rejected.map((r) => el("li", {},
+        el("span", { className: "muted" }, fmtTime(r.at) + "  "),
+        r.kind === "auth_failed" ? `נדחה: מכשיר "${r.text || "ללא מזהה"}"` : `תקלה מול OpenAI: ${r.text}`)))
+    : el("p", { className: "muted" }, "אין"));
+}
+
+function sessionNode(s) {
+  const mins = Math.floor(duration(s) / 60000), secs = Math.round((duration(s) % 60000) / 1000);
+  const meta = [
+    s.device_id,
+    `${mins}:${String(secs).padStart(2, "0")} דק׳`,
+    `${s.kid_turns ?? 0} פניות של הילד`,
+    s.errors ? `${s.errors} שגיאות` : null,
+  ].filter(Boolean).join(" · ");
+  const wrap = el("div", { className: "session", id: "s-" + s.id });
+  const head = el("button", { type: "button" },
+    el("span", { className: "when" }, fmtTime(s.started_at)),
+    s.latency_count ? latencyNode(s.avg_latency_ms) : el("span", { className: "muted" }, "-"),
+    el("span", { className: "meta" }, meta));
+  head.setAttribute("aria-expanded", openSessions.has(s.id));
+  head.onclick = () => {
+    if (openSessions.has(s.id)) { openSessions.delete(s.id); wrap.querySelector(".details")?.remove(); head.setAttribute("aria-expanded", false); }
+    else { openSessions.add(s.id); head.setAttribute("aria-expanded", true); loadTimeline(s.id); }
+  };
+  wrap.append(head);
+  return wrap;
+}
+
+async function loadTimeline(id) {
+  const wrap = $("s-" + id);
+  if (!wrap) return;
+  const { events } = await api("/api/sessions/" + id);
+  const details = el("div", { className: "details" });
+  const timeline = el("div", { className: "timeline" }, ...events.map(eventNode));
+  const copy = el("button", { type: "button", className: "secondary" }, "העתק כטקסט");
+  copy.onclick = async () => {
+    await navigator.clipboard.writeText(asText(id, events));
+    copy.textContent = "הועתק";
+    setTimeout(() => (copy.textContent = "העתק כטקסט"), 1500);
+  };
+  details.append(timeline, el("div", { className: "actions" }, copy));
+  wrap.querySelector(".details")?.remove();
+  wrap.append(details);
+}
+
+function eventNode(e) {
+  const time = el("time", {}, fmtClock(e.at));
+  if (e.kind === "kid" || e.kind === "robot") return el("div", { className: "ev " + e.kind }, time, el("b", {}, LABELS[e.kind]), e.text);
+  if (e.kind === "latency") return el("div", { className: "ev latency" }, time, "זמן תגובה ", latencyNode(e.ms));
+  if (e.kind === "error") return el("div", { className: "ev error" }, time, "שגיאה: " + e.text);
+  if (e.kind === "end") return el("div", { className: "ev end" }, time, "השיחה הסתיימה" + (e.text ? ` (${e.text})` : ""));
+  const text = e.text === "connected" ? "התחבר" : e.text;
+  return el("div", { className: "ev status" }, time, el("bdi", {}, text ?? e.kind));
+}
+
+function asText(id, events) {
+  const lines = events.map((e) => {
+    const t = fmtClock(e.at);
+    if (e.kind === "latency") return `${t} latency ${(e.ms / 1000).toFixed(2)}s`;
+    if (e.kind === "kid" || e.kind === "robot") return `${t} ${LABELS[e.kind]} ${e.text}`;
+    return `${t} ${e.kind}: ${e.text ?? ""}`;
+  });
+  return [`session ${id}`, ...lines].join("\n");
+}
+
+$("login-form").onsubmit = (e) => {
+  e.preventDefault();
+  password = $("password").value;
+  $("login-error").hidden = true;
+  load();
+};
+
+if (password) load();
+setInterval(() => { if (password && !document.hidden && !$("content").hidden) load(); }, 15000);
+</script>
+</body>
+</html>

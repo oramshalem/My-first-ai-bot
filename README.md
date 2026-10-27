@@ -25,7 +25,7 @@ docs/stage1-provider-test.md  פרוטוקול וטבלת השוואה לשלב 
 docs/stage2-setup.md          חשבונות, סביבת פיתוח וצריבה ראשונה
 prompts/character_v1.txt      system prompt של הדמות (מקור יחיד)
 prompts/character_v1.md       הערות ויומן שינויים ל-prompt
-worker/                       שרת הטוקנים ודף בדיקה מהדפדפן
+worker/                       שרת הטוקנים, דף בדיקה ומסך לוגים
 ```
 
 בשלב 4 תתווסף `firmware/` לקושחה.

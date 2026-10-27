@@ -49,6 +49,7 @@
 <body>
 <main>
   <h1>בדיקת שיחה דרך שרת הטוקנים</h1>
+  <a href="/logs">ללוגים</a>
 
   <section>
     <div class="row">
@@ -100,6 +101,22 @@ const ANSWER_START_EVENTS = new Set([
 
 let pc = null, dc = null, mic = null;
 let speechStoppedAt = null;
+let session = null; // { id, deviceId, secret } while a conversation is logged
+
+// Everything shown on this page is also sent to the server log (see /logs).
+function report(kind, text = null, ms = null) {
+  if (!session?.id) return;
+  fetch("/log", {
+    method: "POST",
+    keepalive: true,
+    headers: {
+      "content-type": "application/json",
+      "x-device-id": session.deviceId,
+      authorization: "Bearer " + session.secret,
+    },
+    body: JSON.stringify({ session_id: session.id, events: [{ at: Date.now(), kind, text, ms }] }),
+  }).catch(() => {});
+}
 const latencies = [];
 
 try { const saved = localStorage.getItem("deviceId"); if (saved) $("device-id").value = saved; } catch {}
@@ -130,6 +147,7 @@ function addMessage(who, text) {
 
 function recordLatency(ms) {
   latencies.push(ms);
+  report("latency", null, ms);
   const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length;
   const summary = $("latency-summary");
   summary.classList.remove("empty");
@@ -148,29 +166,35 @@ function handleEvent(ev) {
     speechStoppedAt = null;
   } else if (ev.type === "conversation.item.input_audio_transcription.completed") {
     addMessage("kid", ev.transcript);
+    report("kid", ev.transcript);
   } else if (ev.type === "response.output_audio_transcript.done" || ev.type === "response.audio_transcript.done") {
     addMessage("robot", ev.transcript);
+    report("robot", ev.transcript);
   } else if (ev.type === "error") {
     setStatus("שגיאה: " + (ev.error?.message ?? "לא ידועה"), true);
     log(JSON.stringify(ev));
+    report("error", ev.error?.message ?? JSON.stringify(ev));
   }
 }
 
 async function connect() {
   $("connect").disabled = true;
   const deviceId = $("device-id").value.trim();
+  const secret = $("device-secret").value;
   try { localStorage.setItem("deviceId", deviceId); } catch {}
 
   try {
     setStatus("מבקש טוקן...");
     const tokenRes = await fetch("/token", {
       method: "POST",
-      headers: { "x-device-id": deviceId, authorization: "Bearer " + $("device-secret").value },
+      headers: { "x-device-id": deviceId, authorization: "Bearer " + secret },
     });
     if (tokenRes.status === 401) throw new Error("מזהה או סוד לא נכונים");
     if (!tokenRes.ok) throw new Error("השרת החזיר " + tokenRes.status);
-    const { client_secret, model } = await tokenRes.json();
-    log("token ok, model " + model);
+    const { client_secret, model, session_id } = await tokenRes.json();
+    session = { id: session_id, deviceId, secret };
+    log("token ok, model " + model + ", session " + session_id);
+    report("status", "browser: " + navigator.userAgent);
 
     setStatus("מבקש גישה למיקרופון...");
     mic = await navigator.mediaDevices.getUserMedia({
@@ -183,6 +207,7 @@ async function connect() {
       log("connection: " + pc.connectionState);
       if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
         setStatus("החיבור נפל", true);
+        report("error", "connection " + pc.connectionState);
       }
     };
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
@@ -191,6 +216,7 @@ async function connect() {
     dc.onmessage = (e) => handleEvent(JSON.parse(e.data));
     dc.onopen = () => {
       setStatus("מחובר. אפשר לדבר");
+      report("status", "connected");
       $("disconnect").disabled = false;
       // Let the character greet first, like the robot will when it wakes up.
       dc.send(JSON.stringify({
@@ -212,11 +238,14 @@ async function connect() {
   } catch (err) {
     setStatus(err.message, true);
     log("error: " + err.message);
+    report("error", err.message);
     disconnect(false);
   }
 }
 
 function disconnect(resetStatus = true) {
+  report("end");
+  session = null;
   dc?.close();
   pc?.close();
   mic?.getTracks().forEach((t) => t.stop());
@@ -229,6 +258,7 @@ function disconnect(resetStatus = true) {
 
 $("connect").onclick = connect;
 $("disconnect").onclick = () => disconnect();
+window.addEventListener("pagehide", () => report("end", "page closed"));
 </script>
 </body>
 </html>
