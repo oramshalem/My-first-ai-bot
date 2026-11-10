@@ -93,7 +93,9 @@ export function assetsFromFirmware(image) {
     const label = image.subarray(at + 12, at + 28).toString("utf8").replace(/\0.*$/s, "");
     if (label === "assets") {
       if (offset >= image.length) throw new Error("the firmware file ends before the assets partition");
-      return image.subarray(offset, Math.min(offset + size, image.length));
+      const assets = image.subarray(offset, Math.min(offset + size, image.length));
+      assets.flashAddress = offset;
+      return assets;
     }
   }
   throw new Error("no assets partition in this firmware file. Is it merged-binary.bin?");
