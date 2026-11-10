@@ -32,7 +32,7 @@ jobs:
         working-directory: xiaozhi
         run: |
           source "$IDF_PATH/export.sh"
-          python scripts/build.py esp32-s3-touch-lcd-1.85c --name esp32-s3-touch-lcd-1.85c
+          python scripts/build.py waveshare/esp32-s3-touch-lcd-1.85c --name esp32-s3-touch-lcd-1.85c
 
       - uses: actions/upload-artifact@v4
         with:
