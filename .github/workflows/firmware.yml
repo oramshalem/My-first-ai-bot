@@ -1,0 +1,41 @@
+# Builds Piko's robot firmware: stock xiaozhi-esp32 plus firmware/patch.py.
+# The result is the "piko-firmware" artifact on the run's page: merged-binary.bin,
+# flashed at 0x0 with ESP Tool exactly like the stock firmware.
+name: Robot firmware
+
+on:
+  push:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: piko
+
+      - name: Get xiaozhi-esp32
+        shell: bash
+        run: git clone --depth 1 --branch "$(cat piko/firmware/XIAOZHI_VERSION)" https://github.com/78/xiaozhi-esp32 xiaozhi
+
+      - name: Apply Piko's changes
+        run: python3 piko/firmware/patch.py xiaozhi
+
+      - name: Build
+        shell: bash
+        working-directory: xiaozhi
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py esp32-s3-touch-lcd-1.85c --name esp32-s3-touch-lcd-1.85c
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piko-firmware
+          path: xiaozhi/build/merged-binary.bin
+          if-no-files-found: error
