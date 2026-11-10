@@ -103,6 +103,8 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, e
     } else if (pairing.mac !== mac) {
       log(`robot ${mac} is not paired (paired: ${pairing.mac}). Delete ${pairingFile} to pair it.`);
       return sendJson(res, 403, { error: "not paired" });
+    } else {
+      log(`robot ${mac} started up and checked in`);
     }
 
     sendJson(res, 200, {
