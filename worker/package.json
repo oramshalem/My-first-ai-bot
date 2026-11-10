@@ -5,6 +5,7 @@
   "scripts": {
     "setup-local": "node scripts/setup-local.mjs",
     "check-local": "node scripts/check-local.mjs",
+    "eyes": "node scripts/make-eyes.mjs",
     "local": "node scripts/check-local.mjs --link && node scripts/run-local.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

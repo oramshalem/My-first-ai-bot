@@ -10,7 +10,7 @@
 // Protocol reference: docs/websocket.md in github.com/78/xiaozhi-esp32.
 
 import http from "node:http";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
@@ -26,11 +26,18 @@ const LEAD_FRAMES = 8;
 const VOICE_RMS = 0.02 * 32768;
 const MAX_PENDING_FRAMES = 40; // mic audio kept while Gemini is still connecting
 const GREETING = "תגיד שלום קצר ותציג את עצמך במשפט אחד.";
+// Faces (see eyes/ and bridge/eyes-assets.mjs). The robot shows "neutral" by itself
+// whenever it starts listening, so the bridge only sends the others.
+const THINK_AFTER_MS = 700; // silence after the child's voice before the "thinking" face
+const THINK_GIVE_UP_MS = 8000; // no answer by then: back to the neutral face
+const HAPPY_WORDS = /חחח|הידד|כל הכבוד|איזה יופי|וואו|מצחיק/;
+const EYES_MAX_TRIES = 2;
 
-export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, log = console.log }) {
+export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, eyesFile = null, log = console.log }) {
   const server = http.createServer((req, res) => {
     const { pathname } = new URL(req.url, "http://x");
     if (pathname.startsWith("/xiaozhi/ota")) return handleOta(req, res);
+    if (pathname === "/xiaozhi/assets.bin") return handleAssets(req, res);
     res.writeHead(404).end();
   });
 
@@ -45,7 +52,7 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleRobot(ws, mac));
+    wss.handleUpgrade(req, socket, head, (ws) => handleRobot(ws, mac, req.headers.host));
   });
 
   // The first robot to ask is paired, and only that robot gets the WebSocket token.
@@ -58,6 +65,30 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
     }
   }
 
+  function savePairing(pairing) {
+    writeFileSync(pairingFile, JSON.stringify(pairing, null, 2));
+  }
+
+  // The eyes the robot should have, or null if npm run eyes was never run.
+  function currentEyes() {
+    if (!eyesFile || !existsSync(eyesFile)) return null;
+    const data = readFileSync(eyesFile);
+    return { data, hash: createHash("md5").update(data).digest("hex") };
+  }
+
+  // The robot downloads its assets from here after we give it the address over MCP.
+  function handleAssets(req, res) {
+    req.resume();
+    const eyes = currentEyes();
+    if (!eyes) return res.writeHead(404).end();
+    res.on("finish", () => {
+      const pairing = loadPairing();
+      if (pairing) savePairing({ ...pairing, eyes: eyes.hash });
+      log("the robot downloaded the eyes");
+    });
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": eyes.data.length }).end(eyes.data);
+  }
+
   // The robot calls this on boot. The answer tells it where to open its WebSocket.
   function handleOta(req, res) {
     req.resume(); // the body is the robot's system info, we do not need it
@@ -67,7 +98,7 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
     let pairing = loadPairing();
     if (!pairing) {
       pairing = { mac, token: randomBytes(18).toString("base64url"), paired_at: new Date().toISOString() };
-      writeFileSync(pairingFile, JSON.stringify(pairing, null, 2));
+      savePairing(pairing);
       log(`paired with robot ${mac}`);
     } else if (pairing.mac !== mac) {
       log(`robot ${mac} is not paired (paired: ${pairing.mac}). Delete ${pairingFile} to pair it.`);
@@ -80,7 +111,7 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
     });
   }
 
-  function handleRobot(robot, mac) {
+  function handleRobot(robot, mac, host) {
     const decoder = new OpusScript(IN_RATE, 1, OpusScript.Application.VOIP);
     const encoder = new OpusScript(OUT_RATE, 1, OpusScript.Application.VOIP);
     const robotSessionId = randomUUID();
@@ -103,6 +134,8 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
     let robotText = "";
     let lastVoiceAt = null;
     let awaitingAnswer = false;
+    let thinking = false;
+    let happyShown = false;
 
     log(`robot ${mac} connected`);
 
@@ -153,7 +186,10 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
           transport: "websocket",
           audio_params: { format: "opus", sample_rate: OUT_RATE, channels: 1, frame_duration: FRAME_MS },
         });
+        if (msg.features?.mcp && sendEyes()) return;
         startGemini().catch((err) => close(`could not start Gemini: ${err.message}`));
+      } else if (msg.type === "mcp") {
+        onMcp(msg.payload);
       } else if (msg.type === "listen" && msg.state === "stop" && geminiReady) {
         // Manual mode on the robot: the child let go of the button.
         gemini.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
@@ -163,6 +199,35 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
     });
     robot.on("close", () => close(null));
     robot.on("error", (err) => close(`robot socket error: ${err.message}`));
+
+    function setFace(emotion) {
+      sendRobot({ type: "llm", emotion });
+    }
+
+    // New eyes waiting: tell the robot where to download them, then restart it.
+    // The robot downloads assets only while it boots.
+    function sendEyes() {
+      const eyes = currentEyes();
+      const pairing = loadPairing();
+      if (!eyes || !pairing || pairing.eyes === eyes.hash) return false;
+      const tries = pairing.eyes_tries?.hash === eyes.hash ? pairing.eyes_tries.n : 0;
+      if (tries >= EYES_MAX_TRIES) return false;
+      savePairing({ ...pairing, eyes_tries: { hash: eyes.hash, n: tries + 1 } });
+      log(`sending the eyes to robot ${mac}, it will restart`);
+      sendMcp(1, "self.assets.set_download_url", { url: `http://${host}/xiaozhi/assets.bin` });
+      return true;
+    }
+
+    function sendMcp(id, name, args) {
+      sendRobot({ type: "mcp", payload: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } } });
+    }
+
+    function onMcp(payload) {
+      if (payload?.id === 1) {
+        if (payload.error || payload.result?.isError) return close(`the robot did not take the eyes: ${JSON.stringify(payload.error ?? payload.result)}`);
+        sendMcp(2, "self.reboot", {});
+      }
+    }
 
     async function startGemini() {
       const res = await fetch(`${workerUrl}/token`, {
@@ -199,6 +264,10 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
       if (rms(pcm) > VOICE_RMS && !speaking) {
         lastVoiceAt = Date.now();
         awaitingAnswer = true;
+        if (thinking) {
+          thinking = false;
+          setFace("neutral"); // the child is still talking
+        }
       }
       if (!geminiReady) {
         pendingMic.push(pcm);
@@ -230,7 +299,13 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
       if (!sc) return;
 
       if (sc.inputTranscription?.text) kidText += sc.inputTranscription.text;
-      if (sc.outputTranscription?.text) robotText += sc.outputTranscription.text;
+      if (sc.outputTranscription?.text) {
+        robotText += sc.outputTranscription.text;
+        if (speaking && !happyShown && HAPPY_WORDS.test(robotText)) {
+          happyShown = true;
+          setFace("happy");
+        }
+      }
 
       for (const part of sc.modelTurn?.parts ?? []) {
         if (!part.inlineData?.mimeType?.startsWith("audio/")) continue;
@@ -250,9 +325,12 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
       flushKidText();
       speaking = true;
       ending = false;
+      thinking = false;
+      happyShown = false;
       speakStart = Date.now();
       framesSent = 0;
       sendRobot({ type: "tts", state: "start" });
+      setFace("speaking");
     }
 
     function queuePcm(pcm) {
@@ -265,7 +343,7 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
     }
 
     function pace() {
-      if (!speaking) return;
+      if (!speaking) return updateThinking();
       const allowed = Math.floor((Date.now() - speakStart) / FRAME_MS) + LEAD_FRAMES;
       while (outFrames.length && framesSent < allowed && robot.readyState === WebSocket.OPEN) {
         robot.send(outFrames.shift(), { binary: true });
@@ -280,6 +358,20 @@ export function createBridge({ workerUrl, deviceId, deviceSecret, pairingFile, l
         speaking = false;
         ending = false;
         sendRobot({ type: "tts", state: "stop" });
+      }
+    }
+
+    function updateThinking() {
+      if (!awaitingAnswer || lastVoiceAt === null) return;
+      const quiet = Date.now() - lastVoiceAt;
+      if (!thinking && quiet > THINK_AFTER_MS && quiet < THINK_GIVE_UP_MS) {
+        thinking = true;
+        setFace("thinking");
+      } else if (quiet >= THINK_GIVE_UP_MS) {
+        // probably a noise, not a question
+        awaitingAnswer = false;
+        if (thinking) setFace("neutral");
+        thinking = false;
       }
     }
 
@@ -342,6 +434,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     deviceId: "robot-1",
     deviceSecret: robotSecret,
     pairingFile: fileURLToPath(new URL("../.robot.json", import.meta.url)),
+    eyesFile: fileURLToPath(new URL("../.robot-eyes.bin", import.meta.url)),
     log: (line) => console.log(`[robot] ${line}`),
   }).listen(port, "0.0.0.0", () => console.log(`[robot] bridge ready on port ${port}`));
 }

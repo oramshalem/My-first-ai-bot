@@ -52,9 +52,10 @@ geminiWss.on("connection", (ws, req) => {
       gemini.audioMessages++;
       gemini.audioMime = msg.realtimeInput.audio.mimeType;
       gemini.audioBytes = Buffer.from(msg.realtimeInput.audio.data, "base64").length;
-      if (gemini.audioMessages === 10 && !answered) {
+      // answer a second after the child stops (20 frames), so the "thinking" face has time to show
+      if (gemini.audioMessages === 20 && !answered) {
         answered = true;
-        setTimeout(() => answer("קוראים לי נועה", "נעים מאוד נועה!"), 200);
+        setTimeout(() => answer("קוראים לי נועה", "נעים מאוד נועה!"), 1000);
       }
     }
   });
@@ -217,7 +218,11 @@ test("a full conversation: greeting, the child talks, the robot answers in real 
   assert.equal(tokenRequests[0].authorization, "Bearer robot-secret");
 
   // what the robot got, per turn
-  const kinds = events.map((e) => (e.kind === "audio" ? "a" : e.kind + ":" + (e.state ?? ""))).join(" ").replace(/(a )+a/g, "audio…");
+  const kinds = events
+    .filter((e) => e.kind !== "llm")
+    .map((e) => (e.kind === "audio" ? "a" : e.kind + ":" + (e.state ?? "")))
+    .join(" ")
+    .replace(/(a )+a/g, "audio…");
   assert.match(kinds, /^hello: tts:start audio… tts:stop tts:start audio… tts:stop$/);
   const turn2 = events.slice(events.findLastIndex((e) => e.kind === "tts" && e.state === "start"));
   const frames = turn2.filter((e) => e.kind === "audio");
@@ -226,6 +231,12 @@ test("a full conversation: greeting, the child talks, the robot answers in real 
   const played = turn2.at(-1).t - turn2[0].t;
   assert.ok(played >= (frames.length - 8) * 60 - 100, `sent in real time, not in a burst (${played} ms)`);
   assert.equal(leadViolation, null, leadViolation);
+
+  // the faces: speaking on every answer, thinking between the child's voice and the answer
+  const faces = events.filter((e) => e.kind === "llm").map((e) => e.msg.emotion);
+  assert.deepEqual(faces, ["speaking", "thinking", "speaking"]);
+  const thinkingAt = events.find((e) => e.msg?.emotion === "thinking").t;
+  assert.ok(thinkingAt < turn2[0].t, "thinking shows before the answer starts");
 
   // what the logs screen got
   const kindsLogged = logs.map((e) => e.kind);

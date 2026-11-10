@@ -31,3 +31,4 @@ Thumbs.db
 
 # Robot pairing made by the xiaozhi bridge
 .robot.json
+.robot-eyes.bin
